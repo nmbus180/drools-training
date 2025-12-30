@@ -302,6 +302,932 @@ end
 
 ---
 
+## Rule Organization & Hierarchy
+
+Understanding how Drools organizes rules is critical for building scalable, maintainable systems. This section explains the hierarchy and relationships between different Drools artifacts.
+
+### The Complete Hierarchy
+
+```
+Project (Maven/Gradle)
+│
+├── kmodule.xml (Configuration)
+│   └── Defines Knowledge Bases and Sessions
+│
+├── Knowledge Base (KieBase)
+│   ├── Contains compiled rules from multiple packages
+│   ├── Immutable once built
+│   └── Multiple sessions can share one KieBase
+│
+├── Packages (Logical Grouping)
+│   ├── Organize rules by domain/functionality
+│   ├── Defined by 'package' declaration in DRL files
+│   └── Example: com.company.claims.validation
+│
+├── DRL Files (.drl)
+│   ├── Physical files containing rule definitions
+│   ├── One file can contain multiple rules
+│   ├── Located in src/main/resources
+│   └── Belong to one package per file
+│
+├── Rules (Individual Rule Definitions)
+│   ├── Smallest unit of business logic
+│   ├── Defined with 'rule "name" ... end'
+│   ├── Can belong to rule groups
+│   └── Multiple rules per DRL file
+│
+├── Rule Groups (Execution Control)
+│   ├── agenda-group: Sequential execution groups
+│   ├── activation-group: Only one rule fires
+│   ├── ruleflow-group: Controlled by process flow
+│   └── Rules in same DRL file can belong to different groups
+│
+└── Other Rule Formats
+    ├── Templates (.drl with placeholders)
+    ├── Decision Tables (.xls, .xlsx, .csv)
+    ├── Rule Units (Drools 7+)
+    └── DMN (Decision Model Notation)
+```
+
+### 1. DRL Files (Drools Rule Language)
+
+**Definition**: Physical `.drl` files that contain rule definitions written in Drools Rule Language.
+
+**Location**: `src/main/resources/` (follows package structure)
+
+**Structure**:
+```drl
+// Package declaration (required)
+package com.company.claims.validation;
+
+// Imports
+import com.company.domain.Claim;
+import com.company.domain.Policy;
+import java.time.LocalDate;
+
+// Global variables
+global org.slf4j.Logger logger;
+
+// Functions (reusable code)
+function double calculateTax(double amount) {
+    return amount * 0.05;
+}
+
+// Rule 1
+rule "Validate claim amount"
+when
+    $claim: Claim(amount <= 0)
+then
+    logger.warn("Invalid amount for claim: {}", $claim.getId());
+end
+
+// Rule 2
+rule "Check policy expiration"
+when
+    $claim: Claim($policyNum: policyNumber)
+    $policy: Policy(number == $policyNum, expirationDate < LocalDate.now())
+then
+    $claim.setStatus("DENIED");
+end
+
+// More rules...
+```
+
+**Key Points**:
+- One package per file (all rules in file belong to same package)
+- Can have multiple rules per file
+- Naming convention: Use descriptive names like `ClaimValidation.drl`, `PricingRules.drl`
+- Rules in same file are NOT automatically related - grouping is logical only
+
+### 2. Packages (Logical Organization)
+
+**Definition**: Logical namespace for grouping related rules, similar to Java packages.
+
+**Purpose**:
+- Organize rules by business domain
+- Enable selective loading (include/exclude packages)
+- Prevent naming conflicts
+
+**Declaration**:
+```drl
+package com.company.claims.medical.validation;
+```
+
+**Example Package Structure**:
+```
+src/main/resources/
+└── com/
+    └── company/
+        └── claims/
+            ├── common/
+            │   ├── CommonValidation.drl        # package: com.company.claims.common
+            │   └── DateUtilities.drl
+            │
+            ├── medical/
+            │   ├── validation/
+            │   │   ├── MedicalValidation.drl   # package: com.company.claims.medical.validation
+            │   │   └── DiagnosisRules.drl
+            │   └── pricing/
+            │       └── MedicalPricing.drl      # package: com.company.claims.medical.pricing
+            │
+            └── dental/
+                ├── validation/
+                │   └── DentalValidation.drl    # package: com.company.claims.dental.validation
+                └── pricing/
+                    └── DentalPricing.drl
+```
+
+**Loading Specific Packages**:
+```xml
+<!-- kmodule.xml -->
+<kbase name="medicalRulesKB" packages="com.company.claims.medical">
+    <!-- Only loads rules from com.company.claims.medical.* packages -->
+    <ksession name="medicalSession"/>
+</kbase>
+
+<kbase name="dentalRulesKB" packages="com.company.claims.dental">
+    <!-- Only loads rules from com.company.claims.dental.* packages -->
+    <ksession name="dentalSession"/>
+</kbase>
+
+<kbase name="allRulesKB" packages="com.company.claims">
+    <!-- Loads ALL rules from com.company.claims.* (medical + dental + common) -->
+    <ksession name="allClaimsSession"/>
+</kbase>
+```
+
+**Best Practices**:
+- Mirror business domain structure
+- Use hierarchical naming: `domain.subdomain.function`
+- Keep package names consistent with folder structure
+- Don't make packages too granular (balance between organization and complexity)
+
+### 3. Rules (Individual Business Logic)
+
+**Definition**: The atomic unit of business logic in Drools. Each rule has a unique name within its package.
+
+**Anatomy**:
+```drl
+rule "Unique Rule Name Within Package"
+    // Attributes (optional)
+    salience 100
+    agenda-group "validation"
+    no-loop true
+when
+    // LHS - Conditions (what to match)
+    Pattern1()
+    Pattern2()
+then
+    // RHS - Actions (what to do)
+    System.out.println("Rule fired");
+end
+```
+
+**Rule Identity**:
+- **Name**: Must be unique within the package
+- **Package + Name = Fully Qualified Rule Name**
+- Different packages can have rules with same name
+
+```drl
+// File: com/company/claims/medical/Validation.drl
+package com.company.claims.medical;
+rule "Validate Amount"  // Full name: com.company.claims.medical.Validate Amount
+when
+    // medical validation logic
+then
+    // ...
+end
+
+// File: com/company/claims/dental/Validation.drl
+package com.company.claims.dental;
+rule "Validate Amount"  // Full name: com.company.claims.dental.Validate Amount
+when
+    // dental validation logic (different from medical)
+then
+    // ...
+end
+```
+
+**Relationships Between Rules**:
+- Rules are independent by default
+- Can communicate through:
+  - **Working Memory**: One rule inserts/modifies facts that trigger other rules
+  - **Rule Groups**: Organize execution order
+  - **Salience**: Control priority
+  - **Agenda**: Shared execution queue
+
+### 4. Rule Groups (Execution Control)
+
+Rule groups control WHEN and HOW rules execute, not WHERE they're defined.
+
+#### **A. agenda-group** (Sequential Execution)
+
+**Purpose**: Group rules for sequential, controlled execution.
+
+**Behavior**:
+- Rules in an agenda group only fire when that group has "focus"
+- Use to implement multi-stage processing
+
+```drl
+// In ValidationRules.drl
+rule "Check required fields"
+    agenda-group "validation"  // Stage 1
+when
+    $claim: Claim(claimId == null || amount == null)
+then
+    $claim.setStatus("INVALID");
+end
+
+// In PricingRules.drl
+rule "Calculate price"
+    agenda-group "pricing"  // Stage 2
+when
+    $claim: Claim(status == "VALID")
+then
+    $claim.setPrice(calculatePrice($claim));
+end
+
+// In ApprovalRules.drl
+rule "Approve claim"
+    agenda-group "approval"  // Stage 3
+when
+    $claim: Claim(status == "PRICED", price < 10000)
+then
+    $claim.setStatus("APPROVED");
+end
+```
+
+**Execution**:
+```java
+KieSession session = kContainer.newKieSession();
+session.insert(claim);
+
+// Execute stages in order
+session.getAgenda().getAgendaGroup("validation").setFocus();
+session.fireAllRules();
+
+session.getAgenda().getAgendaGroup("pricing").setFocus();
+session.fireAllRules();
+
+session.getAgenda().getAgendaGroup("approval").setFocus();
+session.fireAllRules();
+```
+
+**Key Point**: Rules in different DRL files and packages can belong to same agenda-group.
+
+#### **B. activation-group** (Mutual Exclusion)
+
+**Purpose**: Only ONE rule in the group can fire. First activated rule cancels others.
+
+**Use Case**: Decision routing where only one path should execute.
+
+```drl
+// Multiple files, same activation-group
+rule "Route small claims"
+    activation-group "claim-routing"
+    salience 100
+when
+    Claim(amount < 1000)
+then
+    // Auto-approve
+end
+
+rule "Route medium claims"
+    activation-group "claim-routing"
+    salience 50
+when
+    Claim(amount >= 1000, amount < 10000)
+then
+    // Manual review
+end
+
+rule "Route large claims"
+    activation-group "claim-routing"
+    salience 10
+when
+    Claim(amount >= 10000)
+then
+    // Senior review
+end
+```
+
+**Behavior**: Once one rule fires, all other rules in the activation-group are cancelled.
+
+#### **C. ruleflow-group** (Process-Driven)
+
+**Purpose**: Rules activated by BPMN process flows.
+
+**Use Case**: Complex workflows with branching, loops, and conditional execution.
+
+```drl
+rule "Validation rule"
+    ruleflow-group "validation-phase"
+when
+    $claim: Claim()
+then
+    // Validation logic
+end
+```
+
+**Controlled by**: BPMN process definition, not direct Java code.
+
+#### **Comparison Table**
+
+| Aspect | agenda-group | activation-group | ruleflow-group |
+|--------|-------------|------------------|----------------|
+| **Execution** | All matching rules in group | Only first activated rule | Controlled by BPMN process |
+| **Control** | Java code sets focus | Automatic (first wins) | Process engine |
+| **Use Case** | Sequential stages | Either/or decisions | Complex workflows |
+| **Multiple Fires** | Yes, all rules | No, only one | Depends on process |
+
+### 5. Rule Sets vs Rule Groups
+
+**Common Confusion**: These terms are often used interchangeably but have different meanings:
+
+#### **Rule Set** (Informal Concept)
+- **Definition**: Informal term for a collection of related rules
+- **Not a Drools construct**: No special syntax or behavior
+- **Usage**: "The medical validation rule set" = all rules for medical validation
+- **Implementation**: Typically a package or multiple DRL files
+
+#### **Rule Group** (Formal Construct)
+- **Definition**: Drools-specific mechanism (agenda-group, activation-group, etc.)
+- **Has behavior**: Controls execution order and mutual exclusion
+- **Syntax**: Defined as rule attribute
+
+**Example**:
+```drl
+// "Claim validation rule set" = informal collection
+package com.company.claims.validation;
+
+// Rule 1 belongs to "validation" agenda-group (formal)
+rule "Check amount"
+    agenda-group "validation"
+when
+    Claim(amount <= 0)
+then
+    // ...
+end
+
+// Rule 2 belongs to same agenda-group
+rule "Check dates"
+    agenda-group "validation"
+when
+    Claim(serviceDate == null)
+then
+    // ...
+end
+```
+
+### 6. Templates (Dynamic Rule Generation)
+
+**Definition**: DRL files with placeholders that generate multiple rules from external data.
+
+**Purpose**:
+- Create many similar rules with different parameters
+- Allow business users to configure rules via spreadsheets/databases
+- Avoid code duplication
+
+**Template Structure**:
+```drl
+template header
+claimType
+minAmount
+maxAmount
+approvalStatus
+
+package com.company.claims.templates;
+
+template "Claim Approval Template"
+
+rule "Approve @{claimType} claims between @{minAmount} and @{maxAmount}"
+when
+    $claim: Claim(
+        type == "@{claimType}",
+        amount >= @{minAmount},
+        amount < @{maxAmount}
+    )
+then
+    modify($claim) { setStatus("@{approvalStatus}") }
+end
+
+end template
+```
+
+**Data Source (CSV, Excel, Database)**:
+```csv
+claimType,minAmount,maxAmount,approvalStatus
+MEDICAL,0,1000,AUTO_APPROVED
+MEDICAL,1000,10000,MANUAL_REVIEW
+MEDICAL,10000,999999,SENIOR_REVIEW
+DENTAL,0,500,AUTO_APPROVED
+DENTAL,500,999999,MANUAL_REVIEW
+```
+
+**Generated Rules** (3 rules from template + 2 data rows = 5 rules):
+```drl
+rule "Approve MEDICAL claims between 0 and 1000"
+when
+    $claim: Claim(type == "MEDICAL", amount >= 0, amount < 1000)
+then
+    modify($claim) { setStatus("AUTO_APPROVED") }
+end
+
+rule "Approve MEDICAL claims between 1000 and 10000"
+when
+    $claim: Claim(type == "MEDICAL", amount >= 1000, amount < 10000)
+then
+    modify($claim) { setStatus("MANUAL_REVIEW") }
+end
+
+// ... 3 more rules
+```
+
+**Key Concept: 1 Template = N Rules**
+
+⚠️ **Important**: A template does NOT define a single rule. Instead:
+- **1 Template + N Data Rows = N Generated Rules**
+- Each data row creates one complete rule from the template pattern
+- Think of it like a cookie cutter: one cutter (template) makes many cookies (rules) from different dough (data)
+
+**Example Breakdown**:
+```
+Template: 1 rule pattern
+Data Rows: 5 rows
+Result: 5 individual rules (not 1 rule!)
+```
+
+**Why Use Templates?**
+- **Same logic, different parameters** - Same rule structure, different values
+- **Many similar rules** - Would require 100+ manually written rules otherwise
+- **Business-configurable** - Business users maintain data, not code
+- **Maintainability** - Change template once, all generated rules update
+
+**When NOT to Use Templates:**
+- Rules have completely different logic
+- Only need a few rules (overhead not worth it)
+- Business logic too complex for parameterization
+
+**Relationship to Other Concepts**:
+- Templates generate regular rules (indistinguishable from hand-written DRL rules)
+- Generated rules belong to specified package
+- Can assign generated rules to rule groups
+- One template can generate hundreds of rules
+- Multiple templates needed for different rule patterns
+
+### Template Reusability: Same Template vs New Template
+
+**Question**: If you created a template for Singapore X airline delay compensation, should you reuse it for Lufthansa in Germany or create a new one?
+
+**Answer**: **Reuse the SAME template** if the business logic is identical - just feed it different data!
+
+#### Example: Single Template for Multiple Airlines
+
+**One Template for ALL Airlines:**
+```drl
+template header
+airline
+country
+delayMinutes
+compensationAmount
+
+package com.company.travel.compensation;
+
+template "Flight Delay Compensation"
+
+rule "Compensate @{airline} passengers for @{delayMinutes} min delay"
+when
+    $flight: Flight(
+        airline == "@{airline}",
+        country == "@{country}",
+        delayMinutes >= @{delayMinutes}
+    )
+    $passenger: Passenger(flightId == $flight.id)
+then
+    modify($passenger) {
+        setCompensation(@{compensationAmount})
+    }
+end
+
+end template
+```
+
+**Data for BOTH Airlines (CSV):**
+```csv
+airline,country,delayMinutes,compensationAmount
+Singapore X,Singapore,60,100
+Singapore X,Singapore,120,200
+Singapore X,Singapore,180,300
+Lufthansa,Germany,60,250
+Lufthansa,Germany,120,400
+Lufthansa,Germany,180,600
+Air France,France,60,250
+British Airways,UK,120,350
+```
+
+**Result**: 8 rules generated from ONE template!
+- 3 rules for Singapore X
+- 3 rules for Lufthansa
+- 1 rule for Air France
+- 1 rule for British Airways
+
+#### Decision Matrix: Same Template vs New Template
+
+| Scenario | Use Same Template | Create New Template |
+|----------|-------------------|---------------------|
+| Same logic, different values | ✅ Yes | ❌ No |
+| Different compensation amounts | ✅ Yes | ❌ No |
+| Different airlines/countries | ✅ Yes | ❌ No |
+| Different regulations (EU vs Asia) | ❌ No | ✅ Yes |
+| Different conditions (weather exemptions) | ❌ No | ✅ Yes |
+| Different actions (voucher vs cash) | ❌ No | ✅ Yes |
+
+#### ✅ Use SAME Template When:
+
+- **Same business logic** (delay → compensation)
+- **Same fields/conditions** (airline, delay minutes, passenger)
+- **Only values differ** (compensation amounts, airline names, countries)
+- **Want centralized maintenance** (change template once, affects all rules)
+- **Rules scale horizontally** (adding more airlines, not more complexity)
+
+#### ❌ Create NEW Template When:
+
+- **Different logic** (EU requires reason codes, Singapore doesn't)
+- **Different conditions** (Germany has weather exemptions, Singapore doesn't)
+- **Different actions** (EU gives cash, Asia gives vouchers)
+- **Different regulations** (EU 261/2004 vs Singapore Consumer Protection Act)
+- **Complex variations** (distance-based vs flat-rate compensation)
+
+#### Real-World Example: When to Split Templates
+
+**Scenario**: EU has different compensation rules than Asia
+
+**Option 1: Different Templates** (Recommended when logic differs)
+
+```drl
+// Template 1: EU Compensation (complex EU 261/2004 rules)
+template header
+airline
+minDelayMinutes
+minDistance
+shortHaulAmount
+longHaulAmount
+
+package com.company.travel.eu;
+
+template "EU Flight Delay Compensation"
+
+rule "EU compensation for @{airline}"
+when
+    $flight: Flight(
+        airline == "@{airline}",
+        departureCountry in ("DE", "FR", "IT", "ES", "UK"),
+        delayMinutes >= @{minDelayMinutes},
+        cancellationReason not in ("weather", "security", "air_traffic"),
+        distance >= @{minDistance}
+    )
+    $passenger: Passenger(flightId == $flight.id)
+then
+    double amount = $flight.getDistance() < 1500
+        ? @{shortHaulAmount}
+        : @{longHaulAmount};
+    modify($passenger) { setCompensation(amount) }
+end
+
+end template
+
+// Template 2: Singapore Compensation (simpler flat-rate rules)
+template header
+airline
+delayMinutes
+compensationAmount
+
+package com.company.travel.asia;
+
+template "Singapore Flight Delay Compensation"
+
+rule "Singapore compensation for @{airline}"
+when
+    $flight: Flight(
+        airline == "@{airline}",
+        departureCountry == "SG",
+        delayMinutes >= @{delayMinutes}
+    )
+    $passenger: Passenger(flightId == $flight.id)
+then
+    modify($passenger) { setCompensation(@{compensationAmount}) }
+end
+
+end template
+```
+
+**Data for EU Template:**
+```csv
+airline,minDelayMinutes,minDistance,shortHaulAmount,longHaulAmount
+Lufthansa,180,0,250,600
+Air France,180,0,250,600
+British Airways,180,0,220,550
+```
+
+**Data for Singapore Template:**
+```csv
+airline,delayMinutes,compensationAmount
+Singapore X,60,100
+Singapore X,120,200
+Air Asia,60,50
+```
+
+**Option 2: Same Template** (If logic is truly identical)
+
+```drl
+// One universal template - only if ALL rules work the same way
+template "Global Flight Delay Compensation"
+
+rule "Compensate @{airline} - @{country} for @{delayMinutes}min delay"
+when
+    $flight: Flight(
+        airline == "@{airline}",
+        country == "@{country}",
+        delayMinutes >= @{delayMinutes}
+    )
+    $passenger: Passenger(flightId == $flight.id)
+then
+    modify($passenger) { setCompensation(@{compensationAmount}) }
+end
+
+end template
+```
+
+#### Best Practice: Start Simple, Split When Needed
+
+1. **Start with ONE template** for Singapore X
+2. **Try adding Lufthansa data** to same template
+3. **If it works cleanly** → Keep using same template ✅
+4. **If you need complex if/else** in template → Split into separate templates ❌
+
+**Rule of Thumb:**
+- **Same template** = Same recipe, different ingredients (salt, sugar, spices)
+- **Different template** = Different recipes entirely (cake vs pasta)
+
+#### Summary: Template Reusability
+
+```
+Same Business Logic + Different Data = Reuse Same Template
+Different Business Logic = Create New Template
+```
+
+**For your use case**: Singapore X → Lufthansa
+- If both follow **same delay rules** → Add Lufthansa rows to existing template ✅
+- If Germany has **different regulations** → Create separate EU template ❌
+
+### 7. Decision Tables (Business-Friendly Rules)
+
+**Definition**: Spreadsheet-based rule definitions that compile to DRL rules.
+
+**Format**: Excel (.xls, .xlsx) or CSV
+
+**Example Decision Table**:
+
+| RuleSet | RuleTable ClaimApproval |||
+|---------|----------|---------|---------|
+| CONDITION | CONDITION | ACTION |
+| Claim Type | Amount Range | Status |
+| type == "$param" | amount >= $1 && amount < $2 | setStatus("$param"); |
+| MEDICAL | 0, 1000 | AUTO_APPROVED |
+| MEDICAL | 1000, 10000 | MANUAL_REVIEW |
+| DENTAL | 0, 500 | AUTO_APPROVED |
+
+**Compiles To**:
+```drl
+rule "ClaimApproval_10"
+when
+    $claim: Claim(type == "MEDICAL", amount >= 0, amount < 1000)
+then
+    $claim.setStatus("AUTO_APPROVED");
+end
+
+rule "ClaimApproval_11"
+when
+    $claim: Claim(type == "MEDICAL", amount >= 1000, amount < 10000)
+then
+    $claim.setStatus("MANUAL_REVIEW");
+end
+
+// ... more rules
+```
+
+**Relationship**:
+- Decision tables are another way to define rules
+- Each row generates one rule
+- All generated rules belong to same package
+- Can specify rule attributes (salience, agenda-group, etc.) in table
+
+### 8. Knowledge Base (KieBase)
+
+**Definition**: Container for all compiled rules, processes, and functions. Immutable once built.
+
+**Role in Hierarchy**:
+- Top-level runtime container
+- Contains rules from one or more packages
+- Multiple sessions can share one KieBase
+- Built from DRL files, templates, and decision tables
+
+**Configuration (kmodule.xml)**:
+```xml
+<kmodule xmlns="http://www.drools.org/xsd/kmodule">
+
+    <!-- KieBase 1: Medical Claims -->
+    <kbase name="medicalKB" packages="com.company.claims.medical">
+        <ksession name="medicalSession"/>
+    </kbase>
+
+    <!-- KieBase 2: Dental Claims -->
+    <kbase name="dentalKB" packages="com.company.claims.dental">
+        <ksession name="dentalSession"/>
+    </kbase>
+
+    <!-- KieBase 3: All Claims -->
+    <kbase name="allClaimsKB" packages="com.company.claims">
+        <ksession name="allClaimsSession" default="true"/>
+    </kbase>
+
+</kmodule>
+```
+
+**Java Usage**:
+```java
+KieServices ks = KieServices.Factory.get();
+KieContainer kContainer = ks.getKieClasspathContainer();
+
+// Get specific KieBase
+KieBase medicalKB = kContainer.getKieBase("medicalKB");
+KieBase dentalKB = kContainer.getKieBase("dentalKB");
+
+// Create sessions from KieBase
+KieSession medicalSession = medicalKB.newKieSession();
+KieSession dentalSession = dentalKB.newKieSession();
+```
+
+**Key Characteristics**:
+- **Immutable**: Once built, cannot add/remove rules
+- **Shareable**: Thread-safe, can be used by multiple sessions
+- **Package Filter**: Includes only specified packages
+- **Compilation**: Rules compiled once at build time
+
+### 9. Sessions (KieSession)
+
+**Definition**: Runtime execution context where facts are inserted and rules are fired.
+
+**Types**:
+- **Stateful**: Maintains working memory across multiple operations
+- **Stateless**: Fire-and-forget, no memory retention
+
+**Relationship to KieBase**:
+```
+KieBase (Blueprint)
+    ├── Session 1 (Working Memory A)
+    ├── Session 2 (Working Memory B)
+    └── Session 3 (Working Memory C)
+```
+
+Multiple sessions can share same KieBase but have independent working memory.
+
+### 10. Complete Example: Putting It All Together
+
+**Project Structure**:
+```
+drools-claim-engine/
+├── pom.xml
+└── src/main/
+    ├── java/
+    │   └── com/company/claims/
+    │       ├── domain/
+    │       │   ├── Claim.java
+    │       │   └── Policy.java
+    │       └── service/
+    │           └── ClaimService.java
+    │
+    └── resources/
+        ├── META-INF/
+        │   └── kmodule.xml                    # Defines KieBases and Sessions
+        │
+        └── com/company/claims/
+            ├── validation/                    # Package: com.company.claims.validation
+            │   ├── CommonValidation.drl       # 5 rules, agenda-group="validation"
+            │   └── MedicalValidation.drl      # 3 rules, agenda-group="validation"
+            │
+            ├── pricing/                       # Package: com.company.claims.pricing
+            │   ├── PricingRules.drl           # 8 rules, agenda-group="pricing"
+            │   └── PricingTemplates.drl       # Template (generates 20 rules)
+            │
+            ├── approval/                      # Package: com.company.claims.approval
+            │   ├── AutoApproval.drl           # 4 rules, activation-group="routing"
+            │   └── ApprovalDecisionTable.xls  # Decision table (generates 15 rules)
+            │
+            └── reports/                       # Package: com.company.claims.reports
+                └── Statistics.drl             # 6 rules, agenda-group="reporting"
+```
+
+**kmodule.xml**:
+```xml
+<kmodule xmlns="http://www.drools.org/xsd/kmodule">
+    <kbase name="claimProcessingKB" packages="com.company.claims">
+        <ksession name="claimSession" default="true"/>
+    </kbase>
+</kmodule>
+```
+
+**Rule Counts**:
+- **Total DRL Files**: 7
+- **Total Packages**: 4
+- **Total Rules Written**: 26 (5+3+8+4+6)
+- **Generated Rules**: 35 (20 from template + 15 from decision table)
+- **Total Rules Loaded**: 61 rules in claimProcessingKB
+- **Agenda Groups**: 4 (validation, pricing, routing, reporting)
+- **Activation Groups**: 1 (routing)
+
+**Execution Flow**:
+```java
+public class ClaimService {
+    private KieContainer kContainer;
+
+    public ClaimService() {
+        KieServices ks = KieServices.Factory.get();
+        this.kContainer = ks.getKieClasspathContainer();
+    }
+
+    public void processClaim(Claim claim, Policy policy) {
+        KieSession session = kContainer.newKieSession();
+
+        try {
+            // Insert facts
+            session.insert(claim);
+            session.insert(policy);
+
+            // Stage 1: Validation (8 rules: 5+3 from validation package)
+            session.getAgenda().getAgendaGroup("validation").setFocus();
+            session.fireAllRules();
+
+            // Stage 2: Pricing (28 rules: 8 from DRL + 20 from template)
+            session.getAgenda().getAgendaGroup("pricing").setFocus();
+            session.fireAllRules();
+
+            // Stage 3: Approval (19 rules: 4 from DRL + 15 from decision table)
+            // activation-group="routing" ensures only 1 fires
+            session.getAgenda().getAgendaGroup("approval").setFocus();
+            session.fireAllRules();
+
+            // Stage 4: Reporting (6 rules from reports package)
+            session.getAgenda().getAgendaGroup("reporting").setFocus();
+            session.fireAllRules();
+
+        } finally {
+            session.dispose();
+        }
+    }
+}
+```
+
+### Summary: Key Takeaways
+
+1. **DRL Files** = Physical files containing rule definitions
+2. **Packages** = Logical namespaces for organizing rules
+3. **Rules** = Individual business logic units (atomic)
+4. **Rule Groups** = Execution control mechanisms (agenda-group, activation-group, etc.)
+5. **Rule Sets** = Informal term for collection of related rules
+6. **Templates** = Rule generators from external data
+7. **Decision Tables** = Spreadsheet-based rule definitions
+8. **KieBase** = Compiled rule container (immutable)
+9. **KieSession** = Runtime execution context
+
+**Hierarchy**:
+```
+Project
+  └── kmodule.xml
+      └── KieBase (contains)
+          └── Packages (logical grouping)
+              └── DRL Files (physical files)
+                  └── Rules (individual logic)
+                      └── Assigned to Rule Groups (execution control)
+```
+
+**Execution Flow**:
+```
+DRL Files → Compiled into → KieBase → Creates → KieSession → Fires → Rules
+                                                                        ↓
+                                                              Controlled by Rule Groups
+```
+
+This organization allows you to:
+- Scale to thousands of rules
+- Maintain rules independently
+- Control execution order
+- Enable business users to configure rules
+- Test rules in isolation
+- Deploy rules without code changes
+
+---
+
 ## Working Memory & Fact Management
 
 ### Inserting Facts
